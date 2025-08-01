@@ -1,0 +1,896 @@
+import { create } from 'zustand';
+import { devtools } from 'zustand/middleware';
+import type { 
+  PatientInfo, 
+  Question, 
+  QuestionOption, 
+  DiagnosisProbability, 
+  ClinicalObservation, 
+  RiskAlert, 
+  AssessmentSession 
+} from '../types';
+import { Gender, AssessmentType, QuestionType, QuestionCategory, RiskLevel } from '../types';
+import difyApiService from '../services/difyApi';
+
+// Extended interfaces for store-specific data
+interface AnswerHistory {
+  questionId: string;
+  questionText: string;
+  selectedAnswer: string | number;
+  answerText: string;
+  points: number;
+  timestamp: Date;
+  category: QuestionCategory;
+}
+
+interface SessionMetrics {
+  sessionId: string;
+  startTime: Date;
+  endTime?: Date;
+  duration: number; // in seconds
+  questionsCompleted: number;
+  totalQuestions: number;
+  completionPercentage: number;
+}
+
+interface ProbabilityUpdate {
+  diagnosis: string;
+  probability: number;
+  confidenceRange: { lower: number; upper: number };
+  supportingFactors: string[];
+  timestamp: Date;
+}
+
+interface UIState {
+  isLoading: boolean;
+  error: string | null;
+  currentView: 'intake' | 'assessment' | 'results';
+  showRiskAlert: boolean;
+  showCompletionDialog: boolean;
+  formValidationErrors: Record<string, string>;
+  apiConnected: boolean;
+}
+
+// Main store interface
+interface AssessmentStore {
+  // Patient State
+  patientInfo: PatientInfo | null;
+  sessionMetrics: SessionMetrics | null;
+  currentStep: number;
+  totalSteps: number;
+  timeRemaining: number; // in seconds
+  
+  // Question Flow State
+  currentQuestion: Question | null;
+  questionIndex: number;
+  answerHistory: AnswerHistory[];
+  availableQuestions: Question[];
+  selectedAnswer: string | number | undefined;
+  
+  // Real-Time Probability Assessment
+  currentProbabilities: DiagnosisProbability[];
+  probabilityHistory: ProbabilityUpdate[];
+  supportingEvidence: Array<{
+    category: string;
+    score: number;
+    maxScore: number;
+    findings: string[];
+  }>;
+  
+  // Clinical Observations
+  clinicalObservations: ClinicalObservation[];
+  observationCategories: string[];
+  
+  // Risk Assessment
+  suicideRiskLevel: RiskLevel;
+  riskFlags: string[];
+  emergencyProtocolTriggered: boolean;
+  riskAlerts: RiskAlert[];
+  
+  // Assessment Results
+  finalDiagnoses: DiagnosisProbability[];
+  assessmentComplete: boolean;
+  resultsReady: boolean;
+  
+  // UI State
+  uiState: UIState;
+  
+  // Dify API State
+  conversationId: string | null;
+  aiConfidence: number;
+  
+  // Actions
+  validateApiConnection: () => Promise<boolean>;
+  startAssessment: (patientInfo: PatientInfo) => Promise<void>;
+  submitAnswer: (answer: string | number, answerText: string, points: number) => Promise<void>;
+  addClinicalObservation: (observation: string, category: string) => Promise<void>;
+  removeClinicalObservation: (observationId: string) => void;
+  updateRiskAssessment: (riskLevel: RiskLevel, flags?: string[]) => void;
+  nextQuestion: () => Promise<void>;
+  previousQuestion: () => void;
+  completeAssessment: () => Promise<void>;
+  resetAssessment: () => void;
+  
+  // UI Actions
+  setCurrentView: (view: 'intake' | 'assessment' | 'results') => void;
+  setLoading: (loading: boolean) => void;
+  setError: (error: string | null) => void;
+  setShowRiskAlert: (show: boolean) => void;
+  clearValidationErrors: () => void;
+  
+  // Timer Actions
+  startTimer: () => void;
+  pauseTimer: () => void;
+  updateTimer: () => void;
+}
+
+// Mock questions as fallback
+const mockQuestions: Question[] = [
+  {
+    id: "phq9-1",
+    text: "Over the last 2 weeks, how often have you been bothered by little interest or pleasure in doing things?",
+    category: QuestionCategory.MOOD,
+    type: QuestionType.RATING_SCALE,
+    options: [
+      { value: 0, text: "Not at all", score: 0, points: 0 },
+      { value: 1, text: "Several days", score: 1, points: 1 },
+      { value: 2, text: "More than half the days", score: 2, points: 2 },
+      { value: 3, text: "Nearly every day", score: 3, points: 3 }
+    ],
+    required: true,
+    order: 1
+  },
+  {
+    id: "phq9-2", 
+    text: "Over the last 2 weeks, how often have you been bothered by feeling down, depressed, or hopeless?",
+    category: QuestionCategory.MOOD,
+    type: QuestionType.RATING_SCALE,
+    options: [
+      { value: 0, text: "Not at all", score: 0, points: 0 },
+      { value: 1, text: "Several days", score: 1, points: 1 },
+      { value: 2, text: "More than half the days", score: 2, points: 2 },
+      { value: 3, text: "Nearly every day", score: 3, points: 3 }
+    ],
+    required: true,
+    order: 2
+  },
+  {
+    id: "gad7-1",
+    text: "Over the last 2 weeks, how often have you been bothered by feeling nervous, anxious, or on edge?",
+    category: QuestionCategory.ANXIETY,
+    type: QuestionType.RATING_SCALE,
+    options: [
+      { value: 0, text: "Not at all", score: 0, points: 0 },
+      { value: 1, text: "Several days", score: 1, points: 1 },
+      { value: 2, text: "More than half the days", score: 2, points: 2 },
+      { value: 3, text: "Nearly every day", score: 3, points: 3 }
+    ],
+    required: true,
+    order: 3
+  },
+  {
+    id: "suicide-risk-1",
+    text: "Over the past 2 weeks, have you had thoughts that you would be better off dead or of hurting yourself?",
+    category: QuestionCategory.SELF_HARM,
+    type: QuestionType.YES_NO,
+    options: [
+      { value: 0, text: "Not at all", score: 0, points: 0 },
+      { value: 1, text: "Several days", score: 1, points: 1 },
+      { value: 2, text: "More than half the days", score: 2, points: 2 },
+      { value: 3, text: "Nearly every day", score: 3, points: 3 }
+    ],
+    required: true,
+    order: 4
+  }
+];
+
+// Initial probability states
+const initialProbabilities: DiagnosisProbability[] = [
+  {
+    diagnosis: "Major Depressive Disorder",
+    probability: 0,
+    confidenceRange: { lower: 0, upper: 5 },
+    range: "minimal",
+    color: "red",
+    description: "Persistent sadness, loss of interest, and significant functional impairment",
+    supportingSymptoms: []
+  },
+  {
+    diagnosis: "Generalized Anxiety Disorder", 
+    probability: 0,
+    confidenceRange: { lower: 0, upper: 5 },
+    range: "minimal",
+    color: "orange",
+    description: "Excessive worry and anxiety about multiple life areas",
+    supportingSymptoms: []
+  },
+  {
+    diagnosis: "Post-Traumatic Stress Disorder",
+    probability: 0,
+    confidenceRange: { lower: 0, upper: 5 },
+    range: "minimal",
+    color: "purple",
+    description: "Trauma-related stress symptoms",
+    supportingSymptoms: []
+  }
+];
+
+export const useAssessmentStore = create<AssessmentStore>()(
+  devtools(
+    (set, get) => ({
+      // Initial State
+      patientInfo: null,
+      sessionMetrics: null,
+      currentStep: 0,
+      totalSteps: mockQuestions.length,
+      timeRemaining: 1800, // 30 minutes in seconds
+      
+      currentQuestion: null,
+      questionIndex: 0,
+      answerHistory: [],
+      availableQuestions: mockQuestions,
+      selectedAnswer: undefined,
+      
+      currentProbabilities: initialProbabilities,
+      probabilityHistory: [],
+      supportingEvidence: [
+        { category: "Depression", score: 0, maxScore: 27, findings: [] },
+        { category: "Anxiety", score: 0, maxScore: 21, findings: [] },
+        { category: "PTSD", score: 0, maxScore: 80, findings: [] }
+      ],
+      
+      clinicalObservations: [],
+      observationCategories: [
+        "Behavioral", 
+        "Emotional", 
+        "Cognitive", 
+        "Physical", 
+        "Social", 
+        "Speech/Language"
+      ],
+      
+      suicideRiskLevel: RiskLevel.LOW,
+      riskFlags: [],
+      emergencyProtocolTriggered: false,
+      riskAlerts: [],
+      
+      finalDiagnoses: [],
+      assessmentComplete: false,
+      resultsReady: false,
+      
+      uiState: {
+        isLoading: false,
+        error: null,
+        currentView: 'intake',
+        showRiskAlert: false,
+        showCompletionDialog: false,
+        formValidationErrors: {},
+        apiConnected: false
+      },
+      
+      conversationId: null,
+      aiConfidence: 0,
+      
+      // Actions Implementation
+      validateApiConnection: async () => {
+        try {
+          set(state => ({
+            uiState: { ...state.uiState, isLoading: true, error: null }
+          }));
+          
+          const isConnected = await difyApiService.validateConnection();
+          
+          set(state => ({
+            uiState: { 
+              ...state.uiState, 
+              isLoading: false, 
+              apiConnected: isConnected,
+              error: isConnected ? null : 'Failed to connect to Dify API. Please check your credentials.'
+            }
+          }));
+          
+          return isConnected;
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown API error';
+          set(state => ({
+            uiState: { 
+              ...state.uiState, 
+              isLoading: false, 
+              apiConnected: false,
+              error: errorMessage
+            }
+          }));
+          return false;
+        }
+      },
+
+      startAssessment: async (patientInfo: PatientInfo) => {
+        try {
+          set(state => ({
+            uiState: { ...state.uiState, isLoading: true, error: null }
+          }));
+
+          // Validate API connection first
+          const isConnected = await get().validateApiConnection();
+          if (!isConnected) {
+            throw new Error('Cannot start assessment: API connection failed');
+          }
+
+          // Initialize with Dify API
+          const difyResponse = await difyApiService.initializeAssessment(patientInfo);
+          
+          const sessionId = difyResponse.sessionId;
+          const startTime = new Date();
+          const questions = difyResponse.initialQuestions.length > 0 ? difyResponse.initialQuestions : mockQuestions;
+          
+          set({
+            patientInfo,
+            conversationId: difyResponse.conversationId,
+            sessionMetrics: {
+              sessionId,
+              startTime,
+              duration: 0,
+              questionsCompleted: 0,
+              totalQuestions: questions.length,
+              completionPercentage: 0
+            },
+            availableQuestions: questions,
+            currentQuestion: questions[0] || null,
+            questionIndex: 0,
+            currentStep: 1,
+            timeRemaining: 1800,
+            answerHistory: [],
+            currentProbabilities: [...initialProbabilities],
+            clinicalObservations: [],
+            assessmentComplete: false,
+            resultsReady: false,
+            uiState: {
+              ...get().uiState,
+              currentView: 'assessment',
+              isLoading: false,
+              error: null
+            }
+          });
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Failed to start assessment';
+          set(state => ({
+            uiState: { 
+              ...state.uiState, 
+              isLoading: false, 
+              error: errorMessage
+            }
+          }));
+          // Fallback to mock data
+          const sessionId = `session_${Date.now()}`;
+          const startTime = new Date();
+          
+          set({
+            patientInfo,
+            sessionMetrics: {
+              sessionId,
+              startTime,
+              duration: 0,
+              questionsCompleted: 0,
+              totalQuestions: mockQuestions.length,
+              completionPercentage: 0
+            },
+            currentQuestion: mockQuestions[0] || null,
+            questionIndex: 0,
+            currentStep: 1,
+            timeRemaining: 1800,
+            answerHistory: [],
+            currentProbabilities: [...initialProbabilities],
+            clinicalObservations: [],
+            assessmentComplete: false,
+            resultsReady: false,
+            uiState: {
+              ...get().uiState,
+              currentView: 'assessment',
+              isLoading: false,
+              error: 'Using offline mode - API connection failed'
+            }
+          });
+        }
+      },
+
+      submitAnswer: async (answer: string | number, answerText: string, points: number) => {
+        const state = get();
+        const currentQuestion = state.currentQuestion;
+        
+        if (!currentQuestion) return;
+
+        try {
+          set(prevState => ({
+            uiState: { ...prevState.uiState, isLoading: true }
+          }));
+
+          // Add to answer history
+          const answerRecord: AnswerHistory = {
+            questionId: currentQuestion.id,
+            questionText: currentQuestion.text,
+            selectedAnswer: answer,
+            answerText,
+            points,
+            timestamp: new Date(),
+            category: currentQuestion.category
+          };
+
+          const updatedAnswerHistory = [...state.answerHistory, answerRecord];
+
+          // Prepare context for Dify API
+          const context = {
+            patientInfo: state.patientInfo!,
+            currentAnswers: updatedAnswerHistory.map(a => ({
+              questionId: a.questionId,
+              answer: a.selectedAnswer.toString(),
+              points: a.points
+            })),
+            clinicalObservations: state.clinicalObservations.map(obs => obs.text),
+            sessionId: state.sessionMetrics?.sessionId || 'fallback'
+          };
+
+          let updatedProbabilities = state.currentProbabilities;
+          let riskAssessment = { level: state.suicideRiskLevel, flags: state.riskFlags };
+
+          // Try to get AI-powered assessment
+          if (state.uiState.apiConnected) {
+            try {
+              const difyResponse = await difyApiService.submitAnswer(
+                currentQuestion.id,
+                answer,
+                answerText,
+                points,
+                context
+              );
+
+              // Update probabilities from AI response
+              if (difyResponse.probabilities.length > 0) {
+                updatedProbabilities = difyResponse.probabilities;
+              }
+
+              // Update risk assessment from AI
+              if (difyResponse.riskAssessment) {
+                riskAssessment = {
+                  level: difyResponse.riskAssessment.level as RiskLevel,
+                  flags: difyResponse.riskAssessment.flags
+                };
+              }
+
+              set(state => ({
+                aiConfidence: difyResponse.confidence
+              }));
+
+            } catch (apiError) {
+              console.warn('API call failed, using fallback logic:', apiError);
+              // Fall back to local calculation
+              updatedProbabilities = calculateLocalProbabilities(state, currentQuestion, points);
+            }
+          } else {
+            // Use local calculation when API not available
+            updatedProbabilities = calculateLocalProbabilities(state, currentQuestion, points);
+          }
+
+          // Update supporting evidence scores
+          const updatedEvidence = state.supportingEvidence.map(evidence => {
+            if (evidence.category === "Depression" && currentQuestion.category === QuestionCategory.MOOD) {
+              return {
+                ...evidence,
+                score: evidence.score + points,
+                findings: points > 0 ? [...evidence.findings, answerText] : evidence.findings
+              };
+            } else if (evidence.category === "Anxiety" && currentQuestion.category === QuestionCategory.ANXIETY) {
+              return {
+                ...evidence,
+                score: evidence.score + points,
+                findings: points > 0 ? [...evidence.findings, answerText] : evidence.findings
+              };
+            }
+            return evidence;
+          });
+
+          // Update session metrics
+          const questionsCompleted = state.sessionMetrics ? state.sessionMetrics.questionsCompleted + 1 : 1;
+          const totalQuestions = state.sessionMetrics ? state.sessionMetrics.totalQuestions : state.availableQuestions.length;
+          const completionPercentage = Math.min(Math.round((questionsCompleted / totalQuestions) * 100), 100);
+          
+          const updatedMetrics = state.sessionMetrics ? {
+            ...state.sessionMetrics,
+            questionsCompleted,
+            completionPercentage
+          } : null;
+
+          set({
+            answerHistory: updatedAnswerHistory,
+            currentProbabilities: updatedProbabilities,
+            supportingEvidence: updatedEvidence,
+            sessionMetrics: updatedMetrics,
+            selectedAnswer: answer,
+            suicideRiskLevel: riskAssessment.level,
+            riskFlags: riskAssessment.flags,
+            uiState: {
+              ...state.uiState,
+              isLoading: false,
+              showRiskAlert: riskAssessment.level !== RiskLevel.LOW
+            }
+          });
+
+          // Handle suicide risk
+          if (currentQuestion.category === QuestionCategory.SELF_HARM && points > 1) {
+            setTimeout(() => {
+              get().updateRiskAssessment(points >= 3 ? RiskLevel.HIGH : RiskLevel.MODERATE, ['Suicidal ideation reported']);
+            }, 100);
+          }
+
+          // Auto-complete assessment if this was the last question
+          if (questionsCompleted >= totalQuestions) {
+            setTimeout(() => {
+              get().completeAssessment();
+            }, 1000);
+          }
+
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Failed to submit answer';
+          set(state => ({
+            uiState: { 
+              ...state.uiState, 
+              isLoading: false, 
+              error: errorMessage
+            }
+          }));
+        }
+      },
+
+      addClinicalObservation: async (observation: string, category: string) => {
+        const state = get();
+        const newObservation: ClinicalObservation = {
+          id: `obs-${Date.now()}`,
+          text: observation,
+          category: category as QuestionCategory | 'behavioral' | 'cognitive' | 'emotional' | 'physical',
+          timestamp: new Date(),
+          severity: 'moderate',
+          source: 'manual-entry'
+        };
+
+        // Add observation locally
+        set({
+          clinicalObservations: [...state.clinicalObservations, newObservation]
+        });
+
+        // Try to update assessment with AI
+        if (state.uiState.apiConnected && state.patientInfo && state.sessionMetrics) {
+          try {
+            const context = {
+              patientInfo: state.patientInfo,
+              currentAnswers: state.answerHistory.map(a => ({
+                questionId: a.questionId,
+                answer: a.selectedAnswer.toString(),
+                points: a.points
+              })),
+              clinicalObservations: [...state.clinicalObservations.map(obs => obs.text), observation],
+              sessionId: state.sessionMetrics.sessionId
+            };
+
+            const difyResponse = await difyApiService.addClinicalObservation(observation, category, context);
+            
+            // Update probabilities based on AI response
+            if (difyResponse.probabilities.length > 0) {
+              set({
+                currentProbabilities: difyResponse.probabilities,
+                aiConfidence: difyResponse.confidence
+              });
+            }
+
+          } catch (error) {
+            console.warn('Failed to update assessment with AI:', error);
+          }
+        }
+      },
+
+      completeAssessment: async () => {
+        const state = get();
+        
+        try {
+          set(prevState => ({
+            uiState: { ...prevState.uiState, isLoading: true }
+          }));
+
+          const endTime = new Date();
+          const duration = state.sessionMetrics ? 
+            Math.floor((endTime.getTime() - state.sessionMetrics.startTime.getTime()) / 1000) : 0;
+
+          let finalDiagnoses = state.currentProbabilities
+            .filter(diagnosis => diagnosis.probability > 0)
+            .sort((a, b) => b.probability - a.probability);
+
+          // Try to get final assessment from AI
+          if (state.uiState.apiConnected && state.patientInfo && state.sessionMetrics) {
+            try {
+              const context = {
+                patientInfo: state.patientInfo,
+                currentAnswers: state.answerHistory.map(a => ({
+                  questionId: a.questionId,
+                  answer: a.selectedAnswer.toString(),
+                  points: a.points
+                })),
+                clinicalObservations: state.clinicalObservations.map(obs => obs.text),
+                sessionId: state.sessionMetrics.sessionId
+              };
+
+              const finalAssessment = await difyApiService.finalizeAssessment(context);
+              
+              if (finalAssessment.finalDiagnoses.length > 0) {
+                finalDiagnoses = finalAssessment.finalDiagnoses;
+              }
+
+              set({
+                aiConfidence: finalAssessment.confidence
+              });
+
+            } catch (error) {
+              console.warn('Failed to get final AI assessment:', error);
+            }
+          }
+
+          set({
+            finalDiagnoses,
+            assessmentComplete: true,
+            resultsReady: true,
+            sessionMetrics: state.sessionMetrics ? {
+              ...state.sessionMetrics,
+              endTime,
+              duration,
+              completionPercentage: 100
+            } : null,
+            uiState: {
+              ...state.uiState,
+              currentView: 'results',
+              showCompletionDialog: true,
+              isLoading: false
+            }
+          });
+
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Failed to complete assessment';
+          set(state => ({
+            uiState: { 
+              ...state.uiState, 
+              isLoading: false, 
+              error: errorMessage
+            }
+          }));
+        }
+      },
+
+      // ... rest of the existing actions remain the same
+      removeClinicalObservation: (observationId: string) => {
+        const state = get();
+        set({
+          clinicalObservations: state.clinicalObservations.filter(obs => obs.id !== observationId)
+        });
+      },
+
+      updateRiskAssessment: (riskLevel: RiskLevel, flags: string[] = []) => {
+        const state = get();
+        
+        let newRiskAlerts = [...state.riskAlerts];
+        if (riskLevel !== RiskLevel.LOW) {
+                     const riskAlert: RiskAlert = {
+             id: `risk-${Date.now()}`,
+             level: riskLevel,
+             message: riskLevel === RiskLevel.HIGH 
+               ? "HIGH SUICIDE RISK ALERT - Immediate Safety Assessment Required"
+               : "Moderate Suicide Risk - Enhanced Monitoring Recommended",
+             timestamp: new Date(),
+             acknowledged: false
+           };
+          newRiskAlerts.push(riskAlert);
+        }
+
+        set({
+          suicideRiskLevel: riskLevel,
+          riskFlags: [...new Set([...state.riskFlags, ...(flags || [])])],
+          emergencyProtocolTriggered: riskLevel === RiskLevel.HIGH,
+          riskAlerts: newRiskAlerts,
+          uiState: {
+            ...state.uiState,
+            showRiskAlert: riskLevel !== RiskLevel.LOW
+          }
+        });
+      },
+
+      nextQuestion: async () => {
+        const state = get();
+        const nextIndex = state.questionIndex + 1;
+        
+        if (nextIndex < state.availableQuestions.length) {
+          // Try to get dynamic next question from AI
+          if (state.uiState.apiConnected && state.patientInfo && state.sessionMetrics) {
+            try {
+              const context = {
+                patientInfo: state.patientInfo,
+                currentAnswers: state.answerHistory.map(a => ({
+                  questionId: a.questionId,
+                  answer: a.selectedAnswer.toString(),
+                  points: a.points
+                })),
+                clinicalObservations: state.clinicalObservations.map(obs => obs.text),
+                sessionId: state.sessionMetrics.sessionId
+              };
+
+              const nextQuestion = await difyApiService.getNextQuestion(context);
+              
+              if (nextQuestion) {
+                set({
+                  questionIndex: nextIndex,
+                  currentQuestion: nextQuestion,
+                  currentStep: nextIndex + 1,
+                  selectedAnswer: undefined
+                });
+                return;
+              }
+            } catch (error) {
+              console.warn('Failed to get dynamic next question:', error);
+            }
+          }
+
+          // Fallback to static questions
+          set({
+            questionIndex: nextIndex,
+            currentQuestion: state.availableQuestions[nextIndex],
+            currentStep: nextIndex + 1,
+            selectedAnswer: undefined
+          });
+        } else {
+          // Assessment complete
+          get().completeAssessment();
+        }
+      },
+
+      previousQuestion: () => {
+        const state = get();
+        const prevIndex = Math.max(0, state.questionIndex - 1);
+        
+        set({
+          questionIndex: prevIndex,
+          currentQuestion: state.availableQuestions[prevIndex],
+          currentStep: prevIndex + 1,
+          selectedAnswer: undefined
+        });
+      },
+
+      resetAssessment: () => {
+        difyApiService.resetConversation();
+        
+        set({
+          patientInfo: null,
+          sessionMetrics: null,
+          currentStep: 0,
+          timeRemaining: 1800,
+          currentQuestion: null,
+          questionIndex: 0,
+          answerHistory: [],
+          selectedAnswer: undefined,
+          currentProbabilities: [...initialProbabilities],
+          probabilityHistory: [],
+          supportingEvidence: [
+            { category: "Depression", score: 0, maxScore: 27, findings: [] },
+            { category: "Anxiety", score: 0, maxScore: 21, findings: [] },
+            { category: "PTSD", score: 0, maxScore: 80, findings: [] }
+          ],
+          clinicalObservations: [],
+          suicideRiskLevel: RiskLevel.LOW,
+          riskFlags: [],
+          emergencyProtocolTriggered: false,
+          riskAlerts: [],
+          finalDiagnoses: [],
+          assessmentComplete: false,
+          resultsReady: false,
+          conversationId: null,
+          aiConfidence: 0,
+          uiState: {
+            isLoading: false,
+            error: null,
+            currentView: 'intake',
+            showRiskAlert: false,
+            showCompletionDialog: false,
+            formValidationErrors: {},
+            apiConnected: false
+          }
+        });
+      },
+
+      // UI Actions
+      setCurrentView: (view: 'intake' | 'assessment' | 'results') => {
+        set(state => ({
+          uiState: { ...state.uiState, currentView: view }
+        }));
+      },
+
+      setLoading: (loading: boolean) => {
+        set(state => ({
+          uiState: { ...state.uiState, isLoading: loading }
+        }));
+      },
+
+      setError: (error: string | null) => {
+        set(state => ({
+          uiState: { ...state.uiState, error }
+        }));
+      },
+
+      setShowRiskAlert: (show: boolean) => {
+        set(state => ({
+          uiState: { ...state.uiState, showRiskAlert: show }
+        }));
+      },
+
+      clearValidationErrors: () => {
+        set(state => ({
+          uiState: { ...state.uiState, formValidationErrors: {} }
+        }));
+      },
+
+      // Timer Actions
+      startTimer: () => {
+        // Timer implementation would use setInterval
+      },
+
+      pauseTimer: () => {
+        // Pause timer implementation
+      },
+
+      updateTimer: () => {
+        const state = get();
+        if (state.timeRemaining > 0) {
+          set({ timeRemaining: state.timeRemaining - 1 });
+        }
+      }
+    }),
+    {
+      name: 'mental-health-assessment-store',
+      partialize: (state) => ({
+        patientInfo: state.patientInfo,
+        answerHistory: state.answerHistory,
+        clinicalObservations: state.clinicalObservations,
+        sessionMetrics: state.sessionMetrics
+      })
+    }
+  )
+);
+
+// Helper function for local probability calculation
+function calculateLocalProbabilities(state: { currentProbabilities: DiagnosisProbability[] }, currentQuestion: Question, points: number): DiagnosisProbability[] {
+  return state.currentProbabilities.map((diagnosis: DiagnosisProbability) => {
+    let probabilityIncrease = 0;
+    let newSupportingSymptoms = [...(diagnosis.supportingSymptoms || [])];
+
+    if (currentQuestion.category === QuestionCategory.MOOD && diagnosis.diagnosis.includes("Depression")) {
+      probabilityIncrease = points * 8;
+      if (points > 0) {
+        newSupportingSymptoms.push(currentQuestion.text.substring(0, 50) + "...");
+      }
+    } else if (currentQuestion.category === QuestionCategory.ANXIETY && diagnosis.diagnosis.includes("Anxiety")) {
+      probabilityIncrease = points * 6;
+      if (points > 0) {
+        newSupportingSymptoms.push(currentQuestion.text.substring(0, 50) + "...");
+      }
+    }
+
+    const newProbability = Math.min(diagnosis.probability + probabilityIncrease, 100);
+    const range: 'minimal' | 'mild' | 'moderate' | 'severe' | 'critical' = 
+                     newProbability >= 70 ? "severe" : 
+                     newProbability >= 40 ? "moderate" : 
+                     newProbability >= 20 ? "mild" : "minimal";
+
+    return {
+      ...diagnosis,
+      probability: newProbability,
+      confidenceRange: {
+        lower: Math.max(0, newProbability - 10),
+        upper: Math.min(100, newProbability + 10)
+      },
+      range,
+      supportingSymptoms: [...new Set(newSupportingSymptoms)]
+    };
+  });
+} 

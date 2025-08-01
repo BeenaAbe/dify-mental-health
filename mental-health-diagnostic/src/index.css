@@ -1,0 +1,256 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Source+Sans+Pro:wght@400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Medical Theme CSS Variables */
+  --color-primary: #1e40af;
+  --color-primary-light: #3b82f6;
+  --color-primary-dark: #1d4ed8;
+  
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  
+  --color-medical-bg: #fafbfc;
+  --color-medical-surface: #ffffff;
+  --color-medical-border: #e1e5e9;
+  --color-medical-text-primary: #2d3748;
+  --color-medical-text-secondary: #4a5568;
+  --color-medical-text-muted: #718096;
+  
+  --spacing-medical-xs: 0.25rem;
+  --spacing-medical-sm: 0.5rem;
+  --spacing-medical-md: 1rem;
+  --spacing-medical-lg: 1.5rem;
+  --spacing-medical-xl: 2rem;
+  
+  --border-radius-medical: 0.375rem;
+  --border-radius-medical-lg: 0.5rem;
+  
+  --shadow-medical: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+  --shadow-medical-lg: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  
+  /* Typography */
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--color-medical-text-primary);
+  background-color: var(--color-medical-bg);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+    background-color: var(--color-medical-bg);
+    color: var(--color-medical-text-primary);
+  }
+  
+  /* Medical Typography Styles */
+  .medical-heading {
+    font-family: 'Source Sans Pro', system-ui, sans-serif;
+    font-weight: 600;
+    color: var(--color-medical-text-primary);
+    line-height: 1.3;
+}
+
+  .medical-body {
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: var(--color-medical-text-secondary);
+  }
+  
+  .medical-caption {
+    font-size: 0.75rem;
+    line-height: 1.3;
+    color: var(--color-medical-text-muted);
+  }
+  
+  .medical-label {
+    font-size: 0.875rem;
+  font-weight: 500;
+    color: var(--color-medical-text-primary);
+    line-height: 1.25;
+  }
+}
+
+/* Custom Medical Theme Classes */
+@layer components {
+  .btn-medical {
+    @apply inline-flex items-center justify-center px-4 py-2 text-sm font-medium transition-colors duration-200 ease-in-out border border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2;
+  }
+  
+  .btn-medical-primary {
+    @apply bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500;
+  }
+  
+  .btn-medical-secondary {
+    @apply bg-gray-100 text-gray-700 hover:bg-gray-200 focus:ring-gray-500;
+  }
+  
+  .btn-medical-danger {
+    @apply bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+  }
+  
+  .rounded-medical {
+    @apply rounded-lg;
+  }
+  
+  .rounded-medical-lg {
+    @apply rounded-xl;
+  }
+  
+  .bg-medical {
+    background-color: var(--color-medical-bg);
+  }
+  
+  .bg-medical-surface {
+    background-color: var(--color-medical-surface);
+  }
+  
+  .bg-medical-primary {
+    @apply bg-blue-700;
+  }
+  
+  .text-medical-primary {
+    color: var(--color-medical-text-primary);
+  }
+  
+  .text-medical-secondary {
+    color: var(--color-medical-text-secondary);
+  }
+  
+  .text-medical-muted {
+    color: var(--color-medical-text-muted);
+  }
+  
+  .text-medical-text-primary {
+    color: var(--color-medical-text-primary);
+  }
+  
+  .text-medical-text-secondary {
+    color: var(--color-medical-text-secondary);
+  }
+  
+  .text-medical-text-muted {
+    color: var(--color-medical-text-muted);
+  }
+  
+  .border-medical {
+    border-color: var(--color-medical-border);
+  }
+  
+  .shadow-medical {
+    box-shadow: var(--shadow-medical);
+}
+  
+  .shadow-medical-lg {
+    box-shadow: var(--shadow-medical-lg);
+  }
+  
+  .shadow-medical-xl {
+    @apply shadow-2xl;
+  }
+  
+  /* Medical Card Styles */
+  .card-medical {
+    @apply bg-white border rounded-xl shadow-lg;
+    border-color: var(--color-medical-border);
+    box-shadow: var(--shadow-medical);
+  }
+  
+  .card-medical-header {
+    @apply px-6 py-4 border-b;
+    border-color: var(--color-medical-border);
+  }
+  
+  .card-medical-body {
+    @apply px-6 py-4;
+}
+  
+  /* Medical Form Styles */
+  .form-medical-input {
+    @apply block w-full px-3 py-2 text-sm border rounded-lg bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200;
+    border-color: var(--color-medical-border);
+  }
+  
+  .form-medical-label {
+    @apply block text-sm font-medium mb-1;
+    color: var(--color-medical-text-primary);
+  }
+  
+  .form-medical-error {
+    @apply text-sm text-red-600 mt-1;
+  }
+  
+  /* Medical Status Indicators */
+  .status-indicator {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  
+  .status-success {
+    @apply bg-green-100 text-green-800;
+  }
+  
+  .status-warning {
+    @apply bg-yellow-100 text-yellow-800;
+  }
+  
+  .status-danger {
+    @apply bg-red-100 text-red-800;
+}
+
+  .status-info {
+    @apply bg-blue-100 text-blue-800;
+  }
+  
+  /* Medical Typography Classes */
+  .text-medical-title {
+    @apply text-xl font-semibold;
+    color: var(--color-medical-text-primary);
+  }
+  
+  .text-medical-heading {
+    @apply text-lg font-medium;
+    color: var(--color-medical-text-primary);
+  }
+  
+  /* Font Family Classes */
+  .font-medical {
+    font-family: 'Source Sans Pro', system-ui, sans-serif;
+  }
+  
+  /* Animation Classes */
+  .animate-pulse-medical {
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-in-out;
+  }
+  
+  .animate-slide-in {
+    animation: slideIn 0.3s ease-out;
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideIn {
+  from { transform: translateY(-10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
